@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shop-api-loadgen
+  labels:
+    app.kubernetes.io/name: shop-api-loadgen
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: shop-api-loadgen
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: shop-api-loadgen
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 12345
+        runAsGroup: 12345
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: k6
+          image: grafana/k6:0.55.0
+          command:
+            - /bin/sh
+            - -c
+            - |
+              while true; do
+                k6 run --no-usage-report /scripts/script.js || true
+                sleep 5
+              done
+          env:
+            - name: BASE_URL
+              value: http://shop-api.sre-demo.svc.cluster.local
+            - name: USERS
+              value: "400"
+            - name: PRODUCTS
+              value: "200"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: script
+              mountPath: /scripts
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: script
+          configMap:
+            name: shop-api-loadgen-script
+        - name: tmp
+          emptyDir: {}

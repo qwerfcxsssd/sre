@@ -1,0 +1,27 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: monitoring
+  namespace: argocd
+spec:
+  project: default
+  sources:
+    # Pin targetRevision to a concrete chart version once the stack is up:
+    # helm search repo prometheus-community/kube-prometheus-stack --versions
+    - repoURL: https://prometheus-community.github.io/helm-charts
+      chart: kube-prometheus-stack
+      targetRevision: "*"
+      helm:
+        releaseName: monitoring
+        valueFiles:
+          - $values/k8s/monitoring/kube-prometheus-stack-values.yaml
+    - repoURL: https://github.com/qwerfcxsssd/sre.git
+      targetRevision: main
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

@@ -1,0 +1,105 @@
+import http from 'k6/http';
+import { check, sleep } from 'k6';
+
+const BASE_URL = __ENV.BASE_URL || 'http://shop-api.sre-demo.svc.cluster.local';
+const USERS = Number(__ENV.USERS || 400);
+const PRODUCTS = Number(__ENV.PRODUCTS || 200);
+
+// One full wave takes 10 minutes; k6 is restarted in a loop by the container,
+// so the waves repeat for as long as the Deployment runs.
+export const options = {
+  discardResponseBodies: false,
+  scenarios: {
+    waves: {
+      executor: 'ramping-arrival-rate',
+      startRate: 10,
+      timeUnit: '1s',
+      preAllocatedVUs: 20,
+      maxVUs: 120,
+      stages: [
+        { target: 25, duration: '2m' },
+        { target: 45, duration: '2m' },
+        { target: 60, duration: '1m' },
+        { target: 30, duration: '2m' },
+        { target: 12, duration: '2m' },
+        { target: 10, duration: '1m' },
+      ],
+    },
+  },
+  thresholds: {
+    checks: ['rate>0.80'],
+  },
+};
+
+const recentOrders = [];
+
+function randomInt(max) {
+  return Math.floor(Math.random() * max);
+}
+
+function pickUser() {
+  return `user-${randomInt(USERS)}`;
+}
+
+function read() {
+  const dice = Math.random();
+  if (dice < 0.5) {
+    const response = http.get(`${BASE_URL}/api/products?limit=50&offset=${randomInt(150)}`, {
+      tags: { op: 'products' },
+    });
+    check(response, { 'products ok': (r) => r.status === 200 });
+    return;
+  }
+  if (dice < 0.85 || recentOrders.length === 0) {
+    const response = http.get(`${BASE_URL}/api/cart/${pickUser()}`, { tags: { op: 'cart' } });
+    check(response, { 'cart ok': (r) => r.status === 200 });
+    return;
+  }
+  const orderId = recentOrders[randomInt(recentOrders.length)];
+  const response = http.get(`${BASE_URL}/api/orders/${orderId}`, { tags: { op: 'order' } });
+  check(response, { 'order ok': (r) => r.status === 200 });
+}
+
+function addToCart() {
+  const payload = JSON.stringify({
+    product_id: 1 + randomInt(PRODUCTS),
+    quantity: 1 + randomInt(3),
+  });
+  const response = http.post(`${BASE_URL}/api/cart/${pickUser()}/items`, payload, {
+    headers: { 'Content-Type': 'application/json' },
+    tags: { op: 'cart_add' },
+  });
+  check(response, { 'cart add ok': (r) => r.status === 201 });
+}
+
+function checkout() {
+  const user = pickUser();
+  http.post(
+    `${BASE_URL}/api/cart/${user}/items`,
+    JSON.stringify({ product_id: 1 + randomInt(PRODUCTS), quantity: 1 + randomInt(2) }),
+    { headers: { 'Content-Type': 'application/json' }, tags: { op: 'cart_add' } },
+  );
+
+  const response = http.post(`${BASE_URL}/api/checkout/${user}`, null, { tags: { op: 'checkout' } });
+  check(response, { 'checkout ok': (r) => r.status === 201 });
+
+  if (response.status === 201) {
+    const orderId = response.json('order_id');
+    recentOrders.push(orderId);
+    if (recentOrders.length > 50) {
+      recentOrders.shift();
+    }
+  }
+}
+
+export default function () {
+  const dice = Math.random();
+  if (dice < 0.70) {
+    read();
+  } else if (dice < 0.95) {
+    addToCart();
+  } else {
+    checkout();
+  }
+  sleep(0.1 + Math.random() * 0.4);
+}
